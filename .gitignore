@@ -22,3 +22,4 @@ librechat/images/
 # Configurações do Claude e documentação locais
 /.claude/
 /docs/
+/openspec/
