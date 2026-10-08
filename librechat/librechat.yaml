@@ -1,0 +1,32 @@
+# LibreChat — configuração da Corporate AI Platform.
+# Referência: https://www.librechat.ai/docs/configuration/librechat_yaml
+# O portal conhece um único endpoint de modelos: o AI Gateway (LiteLLM).
+# Endpoints nativos de provedores ficam desabilitados via ENDPOINTS=custom.
+
+version: 1.3.17
+cache: true
+
+endpoints:
+  custom:
+    - name: 'Corporate AI'
+      # Chave virtual própria do portal no LiteLLM (nunca a master key).
+      apiKey: '${LITELLM_PORTAL_KEY}'
+      baseURL: 'http://litellm:4000/v1'
+      models:
+        # Reserva usada se a busca no gateway falhar: só a IA Local, que todo grupo
+        # permite — uma falha nunca exibe modelo externo.
+        default: ['local-ai']
+        # Busca, por usuário, os modelos que a política de acesso permite a ele
+        # (o gateway filtra /v1/models pelo x-litellm-end-user-id).
+        fetch: true
+      # Títulos de conversa gerados pela IA Local: conteúdo não sai da empresa.
+      titleConvo: true
+      titleModel: 'local-ai'
+      modelDisplayLabel: 'Corporate AI'
+      # Identidade propagada ao gateway (cabeçalhos nativos do LiteLLM):
+      # - usuário final = e-mail: usado na política de acesso (chamadas e listagem)
+      #   e nos registros de uso;
+      # - sessão = ID da conversa.
+      headers:
+        x-litellm-end-user-id: '{{LIBRECHAT_USER_EMAIL}}'
+        x-litellm-session-id: '{{LIBRECHAT_BODY_CONVERSATIONID}}'

@@ -1,0 +1,45 @@
+# Política de cotas e budgets — Corporate AI Platform
+#
+# Aplicada pelo AI Gateway (litellm/custom/quota_policy.py) antes de chamadas a
+# modelos com cota. Alterações valem na próxima requisição, sem reiniciar.
+# Erro de sintaxe ou de estrutura faz chamadas a modelos externos receberem a
+# ação configurada (fail-closed). Como administrar: docs/quotas.md
+#
+# Cada regra:
+#   applies_to:   user:<email> | group:<GRUPO> | all_users | global
+#                 (user/group/all_users medem o consumo de cada usuário;
+#                  global mede o total de todos os usuários)
+#   models:       lista de modelos (nomes lógicos) ou "external" (todos, menos os ilimitados)
+#   period:       daily | weekly (a partir de segunda-feira) | monthly — no fuso QUOTA_TIMEZONE
+#   max_tokens:   limite de total_tokens no período (opcional)
+#   max_cost_usd: limite de custo em US$ no período (opcional; ao menos um dos dois)
+#   action:       opcional — BLOCK | LOCAL_FALLBACK; sobrepõe TOKEN_QUOTA_ACTION/BUDGET_ACTION
+#
+# Todas as regras aplicáveis valem: basta uma esgotada para a requisição ser
+# redirecionada à IA Local (LOCAL_FALLBACK) ou bloqueada com HTTP 429 (BLOCK).
+
+version: 1
+
+# Destino do LOCAL_FALLBACK e modelos que nunca têm cota.
+fallback_model: local-ai
+unlimited_models: [local-ai]
+
+rules:
+  - name: externo-mensal-por-usuario
+    applies_to: all_users
+    models: external
+    period: monthly
+    max_tokens: 1000000
+    max_cost_usd: 20
+
+  - name: gemini-mensal-por-usuario
+    applies_to: all_users
+    models: [gemini]
+    period: monthly
+    max_tokens: 700000
+
+  - name: externo-mensal-empresa
+    applies_to: global
+    models: external
+    period: monthly
+    max_cost_usd: 200

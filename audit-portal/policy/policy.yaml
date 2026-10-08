@@ -1,0 +1,29 @@
+# Permissões do portal de auditoria — Corporate AI Platform (Fase 9)
+#
+# Os perfis são os grupos de litellm/policies/model-access.yaml (e-mail → grupos).
+# Quem não tem nenhum grupo listado aqui (ex.: ADMIN, USER) não entra no portal.
+# Alterações valem na próxima requisição, sem reiniciar. Erro de sintaxe ou de
+# estrutura NEGA o acesso de todos (fail-closed). Guia: docs/audit.md
+#
+# Permissões:
+#   SEARCH_CONVERSATIONS  busca por metadados (quem, quando, modelos, decisão, tokens, custo) — sem conteúdo
+#   SEARCH_CONTENT        busca por termo nas mensagens (revela conteúdo)
+#   VIEW_CONVERSATION     abrir conversas (perguntas e respostas)
+#   EXPORT_CONVERSATION   exportar conversas (JSON)
+#   VIEW_ACCESS_LOG       consultar a trilha de acesso dos auditores
+
+version: 1
+
+roles:
+  AUDITOR: [SEARCH_CONVERSATIONS]
+  MASTER_AUDITOR: [SEARCH_CONVERSATIONS, SEARCH_CONTENT, VIEW_CONVERSATION, EXPORT_CONVERSATION, VIEW_ACCESS_LOG]
+
+# Ações que exigem um motivo (gravado na trilha) e seu tamanho mínimo.
+reason_required: [VIEW_CONVERSATION, EXPORT_CONVERSATION]
+reason_min_chars: 10
+
+# Duração da sessão do portal, em minutos.
+session_minutes: 30
+
+# Máximo de chamadas retornadas por busca ou conversa.
+max_results: 200

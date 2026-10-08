@@ -1,0 +1,14 @@
+# Override: executa a IA Local na GPU NVIDIA.
+# Requer driver NVIDIA + nvidia-container-toolkit no host (docs/architecture.md).
+# Ativação no .env:
+#   COMPOSE_FILE=docker-compose.yml:docker-compose.gpu.yml
+
+services:
+  local-ai:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

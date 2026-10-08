@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Trilha de acesso{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Trilha de acesso dos auditores</h1>
+  <p class="{{ 'ok' if chain.intact else 'error' }}">
+    {% if chain.intact %}Cadeia íntegra: {{ chain.total }} evento(s); hash da cabeça <span class="mono">{{ (chain.head_hash or "")[:16] }}…</span>
+    {% else %}CADEIA ADULTERADA a partir do evento #{{ chain.first_invalid_id }} ({{ chain.total }} evento(s)).{% endif %}
+  </p>
+  <div class="scroll">
+  <table>
+    <thead><tr><th>#</th><th>Horário (UTC)</th><th>Ação</th><th>Resultado</th><th>Auditor</th><th>Perfil</th><th>Canal</th>
+      <th>Alvo</th><th>Conversa / chamada</th><th>Motivo</th><th>Filtros</th><th class="num">Qtd.</th><th>IP</th></tr></thead>
+    <tbody>
+    {% for e in events %}
+      <tr class="{{ 'blocked' if e.outcome != 'ALLOWED' else '' }}">
+        <td>{{ e.id }}</td><td>{{ e.occurred_at.strftime("%Y-%m-%d %H:%M:%S") }}</td><td>{{ e.action }}</td><td>{{ e.outcome }}</td>
+        <td>{{ e.actor }}</td><td>{{ e.actor_roles | join(", ") }}</td><td>{{ e.channel }}</td>
+        <td>{{ e.target_users | join(", ") }}</td><td class="mono">{{ e.conversation_id or e.trace_id or "" }}</td>
+        <td>{{ e.reason or "" }}</td><td class="small mono">{{ e.query | tojson if e.query else "" }}</td>
+        <td class="num">{{ e.result_count if e.result_count is not none else "" }}</td><td>{{ e.client_ip or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endblock %}

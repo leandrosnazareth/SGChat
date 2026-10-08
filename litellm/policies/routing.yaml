@@ -1,0 +1,43 @@
+# Política de roteamento automático (modelo "auto") — Corporate AI Platform, Fase 7
+#
+# Aplicada por litellm/custom/model_router.py quando o modelo pedido é "auto", DEPOIS
+# da segurança (conteúdo não público já foi para a IA Local) e ANTES da cota.
+# Ordem da decisão: permissão → cota/budget → complexidade → disponibilidade → custo/qualidade.
+# Alterações valem na próxima requisição, sem reiniciar. Guia: docs/routing.md
+
+version: 1
+
+auto_model: auto
+# Usado quando nenhum candidato serve (se a política de acesso o permitir).
+fallback_model: local-ai
+
+# Candidatos do AUTO: qualidade (1–5, maior = melhor) e custo relativo (0 = grátis).
+models:
+  local-ai: {quality: 2, cost: 0}
+  gemini:   {quality: 4, cost: 1}
+
+complexity:
+  # Faixas pela pontuação; cada uma exige uma qualidade mínima.
+  tiers:
+    - {name: simple,  max_score: 1, min_quality: 1}
+    - {name: medium,  max_score: 3, min_quality: 2}
+    - {name: complex,               min_quality: 4}   # sem max_score = acima das anteriores
+  # Sinais (somam pontos). Texto avaliado: última mensagem do usuário.
+  signals:
+    long_message:      {min_chars: 800,  points: 2}
+    very_long_message: {min_chars: 3000, points: 2}
+    code_block:        {points: 2}
+    many_questions:    {min_count: 3, points: 1}
+    long_conversation: {min_messages: 6, points: 1}
+    analysis_terms:
+      points: 2          # conta uma vez, mesmo com vários termos
+      terms: [analise, analisar, compare, comparar, comparativo, comparativa, avalie, avaliar,
+              arquitetura, passo a passo, detalhadamente, detalhada, detalhado, otimize, otimizar,
+              refatore, refatorar, demonstre, demonstrar, projete, projetar, implemente, implementar,
+              estrategia, plano de, trade-offs, pros e contras, vantagens e desvantagens]
+
+# Exclui temporariamente modelos com falhas recentes.
+availability:
+  failure_threshold: 2
+  window_seconds: 120
+  cooldown_seconds: 60

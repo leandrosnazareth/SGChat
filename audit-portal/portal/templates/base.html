@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Portal de auditoria{% endblock %} · Corporate AI</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<header class="top">
+  <strong>Corporate AI · Portal de auditoria</strong>
+  {% if user %}
+  <nav>
+    <a href="/">Buscar</a>
+    {% if "VIEW_ACCESS_LOG" in user.perms %}<a href="/access-log">Trilha de acesso</a>{% endif %}
+    <span class="who">{{ user.email }} · {{ user.roles | join(", ") or "sem perfil" }}</span>
+    <form method="post" action="/logout" class="inline"><button type="submit" class="link">Sair</button></form>
+  </nav>
+  {% endif %}
+</header>
+<main>
+  <p class="notice">Todo acesso a este portal é registrado na trilha de auditoria (usuário, ação, filtros, motivo, horário e IP).</p>
+  {% block content %}{% endblock %}
+</main>
+</body>
+</html>

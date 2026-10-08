@@ -1,0 +1,492 @@
+# Corporate AI Platform — stack completa em Docker Compose.
+# Arquitetura, versões e redes: docs/architecture.md
+# Uso: scripts/init-env.sh && docker compose up -d
+
+name: sgchat
+
+x-langfuse-env: &langfuse-env
+  NEXTAUTH_URL: http://localhost:${LANGFUSE_PORT:-3000}
+  DATABASE_URL: postgresql://langfuse:${LANGFUSE_DB_PASSWORD:?defina LANGFUSE_DB_PASSWORD no .env}@postgres:5432/langfuse
+  SALT: ${LANGFUSE_SALT:?defina LANGFUSE_SALT no .env}
+  ENCRYPTION_KEY: ${LANGFUSE_ENCRYPTION_KEY:?defina LANGFUSE_ENCRYPTION_KEY (64 hex) no .env}
+  TELEMETRY_ENABLED: "false"
+  LANGFUSE_ENABLE_EXPERIMENTAL_FEATURES: "false"
+  CLICKHOUSE_MIGRATION_URL: clickhouse://clickhouse:9000
+  CLICKHOUSE_URL: http://clickhouse:8123
+  CLICKHOUSE_USER: clickhouse
+  CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:?defina CLICKHOUSE_PASSWORD no .env}
+  CLICKHOUSE_CLUSTER_ENABLED: "false"
+  LANGFUSE_S3_EVENT_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_EVENT_UPLOAD_REGION: auto
+  LANGFUSE_S3_EVENT_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_EVENT_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:?defina MINIO_ROOT_PASSWORD no .env}
+  LANGFUSE_S3_EVENT_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_EVENT_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_EVENT_UPLOAD_PREFIX: events/
+  # Upload de mídia pelo navegador indisponível: o MinIO não é publicado no host (design D7).
+  LANGFUSE_S3_MEDIA_UPLOAD_BUCKET: langfuse
+  LANGFUSE_S3_MEDIA_UPLOAD_REGION: auto
+  LANGFUSE_S3_MEDIA_UPLOAD_ACCESS_KEY_ID: minio
+  LANGFUSE_S3_MEDIA_UPLOAD_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+  LANGFUSE_S3_MEDIA_UPLOAD_ENDPOINT: http://minio:9000
+  LANGFUSE_S3_MEDIA_UPLOAD_FORCE_PATH_STYLE: "true"
+  LANGFUSE_S3_MEDIA_UPLOAD_PREFIX: media/
+  LANGFUSE_S3_BATCH_EXPORT_ENABLED: "false"
+  REDIS_HOST: redis
+  REDIS_PORT: "6379"
+  REDIS_AUTH: ${REDIS_AUTH:?defina REDIS_AUTH no .env}
+
+services:
+  # ---------------------------------------------------------------------------
+  # Dados
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: postgres:17.11
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: postgres
+      LANGFUSE_DB_PASSWORD: ${LANGFUSE_DB_PASSWORD}
+      LITELLM_DB_PASSWORD: ${LITELLM_DB_PASSWORD:?defina LITELLM_DB_PASSWORD no .env}
+      TZ: UTC
+      PGTZ: UTC
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./postgres/init:/docker-entrypoint-initdb.d:ro
+    # audit-net: só o portal de auditoria e o one-shot que instala a trilha (Fase 9).
+    networks: [data-net, audit-net]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:25.12.9.61
+    restart: unless-stopped
+    user: "101:101"
+    environment:
+      CLICKHOUSE_DB: default
+      CLICKHOUSE_USER: clickhouse
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - clickhouse-logs:/var/log/clickhouse-server
+    networks: [data-net]
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:8123/ping || exit 1
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 1s
+
+  redis:
+    image: redis:7.4.11
+    restart: unless-stopped
+    command: >
+      --requirepass ${REDIS_AUTH}
+      --maxmemory-policy noeviction
+    volumes:
+      - redis-data:/data
+    networks: [data-net]
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
+      interval: 3s
+      timeout: 10s
+      retries: 10
+    environment:
+      REDIS_PASSWORD: ${REDIS_AUTH}
+
+  minio:
+    image: cgr.dev/chainguard/minio@sha256:e7ca559d9f7c0b5f24f5f669bb92f40f3ca88d56273b808bf3a7c116c17d2ffa
+    restart: unless-stopped
+    entrypoint: sh
+    command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
+    environment:
+      MINIO_ROOT_USER: minio
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    networks: [data-net]
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 1s
+      timeout: 5s
+      retries: 5
+      start_period: 1s
+
+  # ---------------------------------------------------------------------------
+  # Observabilidade / auditoria
+  # ---------------------------------------------------------------------------
+  langfuse-worker:
+    image: docker.langfuse.com/langfuse/langfuse-worker:4.53.0
+    restart: unless-stopped
+    # Aguarda o langfuse-web (que executa as migrações do banco) para evitar erros na primeira subida.
+    depends_on:
+      langfuse-web:
+        condition: service_healthy
+    environment:
+      <<: *langfuse-env
+    networks: [observability-net, data-net]
+    healthcheck:
+      # O worker escuta apenas no IP associado ao hostname do container.
+      test: ["CMD-SHELL", "wget -q --spider http://$$(hostname):3030/api/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  langfuse-web:
+    image: docker.langfuse.com/langfuse/langfuse:4.53.0
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    ports:
+      - "${LANGFUSE_PORT:-3000}:3000"
+    environment:
+      <<: *langfuse-env
+      NEXTAUTH_SECRET: ${LANGFUSE_NEXTAUTH_SECRET:?defina LANGFUSE_NEXTAUTH_SECRET no .env}
+      HOSTNAME: 0.0.0.0
+      LANGFUSE_INIT_ORG_ID: ${LANGFUSE_INIT_ORG_ID:-}
+      LANGFUSE_INIT_ORG_NAME: ${LANGFUSE_INIT_ORG_NAME:-}
+      LANGFUSE_INIT_PROJECT_ID: ${LANGFUSE_INIT_PROJECT_ID:-}
+      LANGFUSE_INIT_PROJECT_NAME: ${LANGFUSE_INIT_PROJECT_NAME:-}
+      LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY:?defina LANGFUSE_INIT_PROJECT_PUBLIC_KEY no .env}
+      LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY:?defina LANGFUSE_INIT_PROJECT_SECRET_KEY no .env}
+      LANGFUSE_INIT_USER_EMAIL: ${LANGFUSE_INIT_USER_EMAIL:-}
+      LANGFUSE_INIT_USER_NAME: ${LANGFUSE_INIT_USER_NAME:-}
+      LANGFUSE_INIT_USER_PASSWORD: ${LANGFUSE_INIT_USER_PASSWORD:?defina LANGFUSE_INIT_USER_PASSWORD no .env}
+    networks: [edge, observability-net, data-net]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/public/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 60s
+
+  # ---------------------------------------------------------------------------
+  # Portal (LibreChat) — usa exclusivamente o AI Gateway
+  # ---------------------------------------------------------------------------
+  librechat:
+    image: registry.librechat.ai/librechat-ai/librechat:v0.8.8
+    restart: unless-stopped
+    depends_on:
+      mongodb:
+        condition: service_healthy
+      meilisearch:
+        condition: service_healthy
+      litellm-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "${LIBRECHAT_PORT:-3080}:3080"
+    # Nenhuma chave de provedor neste container: somente a chave virtual do gateway.
+    environment:
+      HOST: 0.0.0.0
+      PORT: "3080"
+      DOMAIN_CLIENT: http://localhost:${LIBRECHAT_PORT:-3080}
+      DOMAIN_SERVER: http://localhost:${LIBRECHAT_PORT:-3080}
+      CONFIG_PATH: /app/librechat.yaml
+      MONGO_URI: mongodb://mongodb:27017/LibreChat
+      SEARCH: "true"
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY:?defina MEILI_MASTER_KEY no .env}
+      MEILI_NO_ANALYTICS: "true"
+      CREDS_KEY: ${LIBRECHAT_CREDS_KEY:?defina LIBRECHAT_CREDS_KEY (64 hex) no .env}
+      CREDS_IV: ${LIBRECHAT_CREDS_IV:?defina LIBRECHAT_CREDS_IV (32 hex) no .env}
+      JWT_SECRET: ${LIBRECHAT_JWT_SECRET:?defina LIBRECHAT_JWT_SECRET no .env}
+      JWT_REFRESH_SECRET: ${LIBRECHAT_JWT_REFRESH_SECRET:?defina LIBRECHAT_JWT_REFRESH_SECRET no .env}
+      # Apenas o endpoint custom (gateway); provedores nativos e agents desabilitados.
+      ENDPOINTS: custom
+      LITELLM_PORTAL_KEY: ${LITELLM_PORTAL_KEY}
+      # Usuários criados pelo administrador (scripts/create-user.sh).
+      ALLOW_REGISTRATION: "false"
+      ALLOW_EMAIL_LOGIN: "true"
+      ALLOW_SOCIAL_LOGIN: "false"
+      ALLOW_SOCIAL_REGISTRATION: "false"
+      ALLOW_PASSWORD_RESET: "false"
+      ALLOW_UNVERIFIED_EMAIL_LOGIN: "true"
+      APP_TITLE: Corporate AI
+      # Uma única réplica nesta POC (habilita o agendador sem Redis).
+      SCHEDULES_SINGLE_PROCESS: "true"
+    volumes:
+      - ./librechat/librechat.yaml:/app/librechat.yaml:ro
+      - librechat-uploads:/app/uploads
+      - librechat-images:/app/client/public/images
+      - librechat-logs:/app/logs
+    networks: [edge, frontend-net, portal-data-net]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3080/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  mongodb:
+    image: mongo:8.0.20
+    restart: unless-stopped
+    command: mongod --noauth
+    volumes:
+      - mongodb-data:/data/db
+    networks: [portal-data-net]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  meilisearch:
+    image: getmeili/meilisearch:v1.35.1
+    restart: unless-stopped
+    environment:
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_NO_ANALYTICS: "true"
+      MEILI_MASTER_KEY: ${MEILI_MASTER_KEY}
+    volumes:
+      - meilisearch-data:/meili_data
+    networks: [portal-data-net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:7700/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # ---------------------------------------------------------------------------
+  # AI Gateway (LiteLLM) — único ponto de acesso a modelos
+  # ---------------------------------------------------------------------------
+  litellm:
+    image: docker.litellm.ai/berriai/litellm:v1.104.0
+    restart: unless-stopped
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      local-ai:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://litellm:${LITELLM_DB_PASSWORD}@postgres:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?defina LITELLM_MASTER_KEY no .env}
+      STORE_MODEL_IN_DB: "False"
+      LITELLM_TELEMETRY: "False"
+      # Chaves de provedores existem SOMENTE neste container.
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      LITELLM_GEMINI_MODEL: gemini/${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      LITELLM_LOCAL_AI_MODEL: ollama_chat/${LOCAL_AI_MODEL:-qwen2.5:3b}
+      MODEL_ACCESS_POLICY_PATH: /app/policies/model-access.yaml
+      QUOTA_POLICY_PATH: /app/policies/quotas.yaml
+      SECURITY_POLICY_PATH: /app/policies/security.yaml
+      ROUTING_POLICY_PATH: /app/policies/routing.yaml
+      SECURITY_CONFIDENCE_THRESHOLD: ${SECURITY_CONFIDENCE_THRESHOLD:-0.80}
+      TOKEN_QUOTA_ACTION: ${TOKEN_QUOTA_ACTION:-LOCAL_FALLBACK}
+      BUDGET_ACTION: ${BUDGET_ACTION:-LOCAL_FALLBACK}
+      QUOTA_TIMEZONE: ${QUOTA_TIMEZONE:-America/Sao_Paulo}
+      # Auditoria (Fase 8): traces no Langfuse self-hosted, pela rede observability-net.
+      LANGFUSE_HOST: http://langfuse-web:3000
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+    volumes:
+      - ./litellm/config.yaml:/app/config.yaml:ro
+      # Extensões próprias: ACL de modelos (Fase 3) e Security Router (Fase 5).
+      - ./litellm/custom:/app/custom:ro
+      # Diretório (não arquivo) para que edições da política sejam vistas sem reinício.
+      - ./litellm/policies:/app/policies:ro
+    ports:
+      # Apenas loopback, para testes de fumaça a partir do host.
+      - "127.0.0.1:${LITELLM_PORT:-4000}:4000"
+    networks: [edge, frontend-net, ai-net, observability-net, data-net]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:4000/health/liveliness')"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  litellm-bootstrap:
+    image: docker.litellm.ai/berriai/litellm:v1.104.0
+    # One-shot: garante a chave virtual do portal (LITELLM_PORTAL_KEY).
+    entrypoint: ["python3", "/opt/bootstrap/bootstrap.py"]
+    depends_on:
+      litellm:
+        condition: service_healthy
+    environment:
+      LITELLM_URL: http://litellm:4000
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY}
+      LITELLM_PORTAL_KEY: ${LITELLM_PORTAL_KEY:?defina LITELLM_PORTAL_KEY no .env}
+      # Rate limit padrão por usuário final (budget nativo corporate-end-user-default).
+      RATE_LIMIT_RPM: ${RATE_LIMIT_RPM:-30}
+      RATE_LIMIT_TPM: ${RATE_LIMIT_TPM:-50000}
+    volumes:
+      - ./litellm/bootstrap.py:/opt/bootstrap/bootstrap.py:ro
+    networks: [frontend-net]
+    restart: "no"
+
+  # ---------------------------------------------------------------------------
+  # IA Local (Ollama) — CPU por padrão; GPU via docker-compose.gpu.yml
+  # ---------------------------------------------------------------------------
+  local-ai-pull:
+    image: ollama/ollama:0.40.0
+    # One-shot: baixa o modelo para o volume e termina. Único serviço da IA Local
+    # com saída à internet.
+    entrypoint: ["/bin/sh", "/opt/local-ai/pull-model.sh"]
+    environment:
+      LOCAL_AI_MODEL: ${LOCAL_AI_MODEL:-qwen2.5:3b}
+    volumes:
+      - ollama-models:/root/.ollama
+      - ./local-ai/pull-model.sh:/opt/local-ai/pull-model.sh:ro
+    networks: [edge]
+    restart: "no"
+
+  local-ai:
+    image: ollama/ollama:0.40.0
+    restart: unless-stopped
+    depends_on:
+      local-ai-pull:
+        condition: service_completed_successfully
+    environment:
+      LOCAL_AI_MODEL: ${LOCAL_AI_MODEL:-qwen2.5:3b}
+      OLLAMA_HOST: 0.0.0.0:11434
+      OLLAMA_CONTEXT_LENGTH: ${OLLAMA_CONTEXT_LENGTH:-8192}
+      OLLAMA_KEEP_ALIVE: 30m
+    volumes:
+      - ollama-models:/root/.ollama
+    # Somente rede interna: sem saída à internet e sem porta no host.
+    networks: [ai-net]
+    healthcheck:
+      # Saudável apenas quando o modelo configurado está disponível.
+      test: ["CMD-SHELL", "ollama show \"$$LOCAL_AI_MODEL\" >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
+  # ---------------------------------------------------------------------------
+  # Detecção de PII (usado pelo Security Router a partir da Fase 5)
+  # ---------------------------------------------------------------------------
+  presidio-analyzer:
+    image: mcr.microsoft.com/presidio-analyzer:2.2.362
+    restart: unless-stopped
+    environment:
+      # gunicorn 25.1 pode travar o worker (deadlock de logging após fork) com o
+      # control socket ativo; desligado por não ser usado.
+      GUNICORN_CMD_ARGS: --no-control-socket
+    networks: [ai-net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  presidio-anonymizer:
+    image: mcr.microsoft.com/presidio-anonymizer:2.2.362
+    restart: unless-stopped
+    environment:
+      # gunicorn 25.1 pode travar o worker (deadlock de logging após fork) com o
+      # control socket ativo; desligado por não ser usado.
+      GUNICORN_CMD_ARGS: --no-control-socket
+    networks: [ai-net]
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # ---------------------------------------------------------------------------
+  # Auditoria empresarial (Fase 9) — docs/audit.md
+  # ---------------------------------------------------------------------------
+  audit-db-init:
+    image: postgres:17.11
+    # One-shot idempotente: papel audit_portal, banco audit e trilha imutável (hash encadeado).
+    entrypoint: ["bash", "/opt/audit/init.sh"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PGHOST: postgres
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      AUDIT_DB_PASSWORD: ${AUDIT_DB_PASSWORD:?defina AUDIT_DB_PASSWORD no .env}
+    volumes:
+      - ./audit-portal/sql/init.sh:/opt/audit/init.sh:ro
+    networks: [audit-net]
+    restart: "no"
+
+  audit-portal:
+    build: ./audit-portal
+    image: sgchat/audit-portal:1.0.0
+    restart: unless-stopped
+    depends_on:
+      audit-db-init:
+        condition: service_completed_successfully
+      langfuse-web:
+        condition: service_healthy
+      librechat:
+        condition: service_started
+    ports:
+      - "${AUDIT_PORTAL_PORT:-3090}:8080"
+    environment:
+      AUDIT_DATABASE_URL: postgresql://audit_portal:${AUDIT_DB_PASSWORD}@postgres:5432/audit
+      AUDIT_SESSION_SECRET: ${AUDIT_SESSION_SECRET:?defina AUDIT_SESSION_SECRET no .env}
+      AUDIT_POLICY_PATH: /app/policy/policy.yaml
+      MODEL_ACCESS_POLICY_PATH: /app/policies/model-access.yaml
+      LIBRECHAT_URL: http://librechat:3080
+      LANGFUSE_URL: http://langfuse-web:3000
+      # Leitura do registro: as chaves ficam só no servidor (o navegador do auditor nunca as recebe).
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_INIT_PROJECT_PUBLIC_KEY}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_INIT_PROJECT_SECRET_KEY}
+      TZ: UTC
+    volumes:
+      - ./audit-portal/policy:/app/policy:ro
+      # Grupos AUDITOR / MASTER_AUDITOR (fonte única de grupos da plataforma).
+      - ./litellm/policies:/app/policies:ro
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    # Sem data-net: não alcança ClickHouse, Redis nem MinIO.
+    networks: [edge, frontend-net, observability-net, audit-net]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/health')"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+networks:
+  # Única rede com saída à internet e com portas publicadas no host.
+  edge: {}
+  frontend-net:
+    internal: true
+  portal-data-net:
+    internal: true
+  ai-net:
+    internal: true
+  observability-net:
+    internal: true
+  data-net:
+    internal: true
+  # Trilha de acesso dos auditores: postgres ↔ audit-portal / audit-db-init (Fase 9).
+  audit-net:
+    internal: true
+
+volumes:
+  postgres-data:
+  clickhouse-data:
+  clickhouse-logs:
+  redis-data:
+  minio-data:
+  ollama-models:
+  mongodb-data:
+  meilisearch-data:
+  librechat-uploads:
+  librechat-images:
+  librechat-logs:

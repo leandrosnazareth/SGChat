@@ -1,0 +1,60 @@
+# LiteLLM Proxy — AI Gateway da Corporate AI Platform.
+# Valores "os.environ/VAR" são resolvidos pelo LiteLLM a partir do ambiente do
+# container (definido no docker-compose.yml a partir do .env). Nenhum secret aqui.
+
+model_list:
+  # IA Local (Ollama) — nunca sai da infraestrutura; custo zero.
+  - model_name: local-ai
+    litellm_params:
+      model: os.environ/LITELLM_LOCAL_AI_MODEL      # ollama_chat/<LOCAL_AI_MODEL>
+      api_base: http://local-ai:11434
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+    model_info:
+      description: IA Local corporativa (dados não saem da empresa)
+
+  # Modelo lógico AUTO (Fase 7): o hook custom/model_router.py troca por um modelo
+  # concreto. Aponta para a IA Local: se o hook não atuar, o caminho é o seguro.
+  - model_name: auto
+    litellm_params:
+      model: os.environ/LITELLM_LOCAL_AI_MODEL
+      api_base: http://local-ai:11434
+      input_cost_per_token: 0
+      output_cost_per_token: 0
+    model_info:
+      description: Escolha automática do modelo (docs/routing.md)
+
+  # Provedor externo. ATENÇÃO: sem Security Router até a Fase 5.
+  - model_name: gemini
+    litellm_params:
+      model: os.environ/LITELLM_GEMINI_MODEL        # gemini/<GEMINI_MODEL>
+      api_key: os.environ/GEMINI_API_KEY
+    model_info:
+      description: Google Gemini (externo)
+
+litellm_settings:
+  request_timeout: 300
+  # Hooks próprios (litellm/custom/, carregados relativos a este arquivo).
+  # Ordem = ordem de avaliação: auditoria (início) → permissão → segurança → auto → cota → auditoria (fim).
+  # - audit_metadata.start: descarta chaves do cliente que alterariam o registro e liga os
+  #   metadados do trace às decisões dos hooks seguintes (docs/audit.md)
+  # - model_access: ACL de modelos por usuário/grupo (policies/model-access.yaml, docs/models.md)
+  # - security_router: classificação do conteúdo; o que não pode sair vai para a IA Local
+  #   ou é bloqueado (policies/security.yaml, docs/security.md)
+  # - model_router: escolha automática quando o modelo pedido é "auto" (policies/routing.yaml, docs/routing.md)
+  # - quota_policy: cotas de tokens e budgets em US$ (policies/quotas.yaml, docs/quotas.md)
+  # - audit_metadata.finish: tags pesquisáveis com a decisão (docs/audit.md)
+  callbacks: ["custom.audit_metadata.start", "custom.model_access.handler", "custom.security_router.handler", "custom.model_router.handler", "custom.quota_policy.handler", "custom.audit_metadata.finish"]
+  # Auditoria (Fase 8): toda chamada, atendida ou não, vira trace no Langfuse interno
+  # (LANGFUSE_HOST/PUBLIC_KEY/SECRET_KEY no docker-compose.yml).
+  success_callback: ["langfuse"]
+  failure_callback: ["langfuse"]
+  # Não reenviar para outro modelo em caso de erro (sem fallback silencioso).
+  num_retries: 0
+  # Rate limit nativo por usuário final (RPM/TPM): budget criado pelo litellm-bootstrap
+  # e aplicado a todo end_user sem budget próprio (docs/quotas.md).
+  max_end_user_budget_id: corporate-end-user-default
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL

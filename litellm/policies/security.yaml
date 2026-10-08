@@ -1,0 +1,144 @@
+# Política de segurança de conteúdo — Corporate AI Platform (Security Router, Fase 5)
+#
+# Aplicada pelo AI Gateway (litellm/custom/security_router.py) a TODA requisição a
+# modelo, antes de qualquer chamada externa. Alterações valem na próxima requisição,
+# sem reiniciar. Política inválida → nada sai da empresa (IA Local).
+# Como administrar: docs/security.md
+#
+# Níveis (do menos ao mais restritivo): PUBLIC < INTERNAL < CONFIDENTIAL < RESTRICTED.
+# A classificação de uma requisição é a evidência MAIS restritiva encontrada em todo
+# o contexto (mensagem atual, histórico, instruções, ferramentas).
+
+version: 1
+
+# Modelos internos (dados não saem da empresa). Os demais são externos.
+local_models: [local-ai]
+# Destino quando o conteúdo não pode sair.
+local_model: local-ai
+
+# O que fazer quando o modelo pedido é EXTERNO: ALLOW | LOCAL | BLOCK
+actions:
+  PUBLIC: ALLOW
+  INTERNAL: LOCAL
+  CONFIDENTIAL: LOCAL
+  RESTRICTED: BLOCK
+# RESTRICTED pedido à própria IA Local: BLOCK | ALLOW
+restricted_on_local: BLOCK
+
+# Microsoft Presidio (detecção de PII). Imagem atual só suporta inglês; por isso
+# só entidades baseadas em padrão (confiáveis em português) são usadas.
+# PERSON / LOCATION / DATE_TIME geram falsos positivos em português e ficam de fora.
+presidio:
+  url: http://presidio-analyzer:3000
+  language: en
+  score_threshold: 0.6
+  timeout_seconds: 10
+  entities:
+    EMAIL_ADDRESS: CONFIDENTIAL
+    IBAN_CODE: CONFIDENTIAL
+    CREDIT_CARD: RESTRICTED
+    CRYPTO: RESTRICTED
+    US_SSN: RESTRICTED
+
+# Expressões regulares (sintaxe Python), aplicadas ao texto original.
+# validator opcional: cpf | cnpj (dígito verificador) | code_block (≥ 3 linhas).
+regex_rules:
+  # --- Segredos e credenciais (RESTRICTED) ---
+  - name: chave-openai
+    classification: RESTRICTED
+    pattern: '\bsk-[A-Za-z0-9_\-]{8,}'
+  - name: chave-aws
+    classification: RESTRICTED
+    pattern: '\bAKIA[0-9A-Z]{16}\b'
+  - name: chave-google
+    classification: RESTRICTED
+    pattern: '\bAIza[0-9A-Za-z_\-]{35}\b'
+  - name: token-github
+    classification: RESTRICTED
+    pattern: '\bgh[pousr]_[A-Za-z0-9]{36,}\b'
+  - name: chave-privada
+    classification: RESTRICTED
+    pattern: '-----BEGIN [A-Z ]*PRIVATE KEY-----'
+  - name: jwt
+    classification: RESTRICTED
+    pattern: '\beyJ[A-Za-z0-9_\-]{10,}\.eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]+'
+  - name: bearer-token
+    classification: RESTRICTED
+    pattern: '\bBearer\s+[A-Za-z0-9\-._~+/]{20,}=*'
+  - name: credencial-declarada
+    # "senha: abc123", "a senha do servidor de produção é Prod@2026!", "minha API key é ...":
+    # até 6 palavras entre o termo e o valor; o valor precisa parecer um segredo
+    # (≥ 6 caracteres com dígito ou símbolo), para não pegar "o token é importante".
+    classification: RESTRICTED
+    flags: i
+    pattern: '\b(?:senha|password|passwd|pwd|api[\s_-]?key|access[\s_-]?key|chave\s+de\s+api|token|secret|segredo|credenciais?)\b(?:[\s,]+[^\s:=]+){0,6}?\s*(?:é|eh|e|:|=|->)\s*(?=\S*[0-9!@#$%^&*_\-+=.])\S{6,}'
+
+  # --- Dados pessoais e corporativos (CONFIDENTIAL) ---
+  - name: cpf
+    classification: CONFIDENTIAL
+    pattern: '(?<![\d.])\d{3}\.?\d{3}\.?\d{3}-?\d{2}(?![\d])'
+    validator: cpf
+  - name: cnpj
+    classification: CONFIDENTIAL
+    pattern: '(?<![\d.])\d{2}\.?\d{3}\.?\d{3}/?\d{4}-?\d{2}(?![\d])'
+    validator: cnpj
+  - name: telefone-br
+    classification: CONFIDENTIAL
+    pattern: '(?:\+55\s?)?\(\d{2}\)\s?9?\d{4}-?\d{4}\b|\b(?:\+55\s?)?\d{2}\s9\d{4}-\d{4}\b'
+  - name: ip-privado
+    classification: CONFIDENTIAL
+    pattern: '\b(?:10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2})\b'
+  - name: numero-de-contrato
+    classification: CONFIDENTIAL
+    flags: i
+    pattern: '\bcontrato\s+(?:n[º°o.]?\s*|n[úu]mero\s+|#)\s*[\w./-]*\d'
+  - name: valor-em-reais
+    classification: CONFIDENTIAL
+    pattern: 'R\$\s?\d'
+  - name: codigo-fonte
+    classification: CONFIDENTIAL
+    pattern: '```[\s\S]*?```'
+    validator: code_block
+
+  # --- Tentativas de manipular a classificação (prompt injection) ---
+  # O classificador semântico (IA Local) é um modelo pequeno e manipulável; estas
+  # tentativas nunca saem da empresa, independentemente da resposta dele.
+  - name: tentativa-de-manipulacao
+    classification: CONFIDENTIAL
+    flags: i
+    pattern: '\b(?:ignor[ea]r?|desconsider[ea]r?|esque[cç][ae]r?|disregard|ignore)\b[^.\n]{0,40}\b(?:instru[cç][oõ]es|regras|orienta[cç][oõ]es|instructions|rules)\b|\bnova\s+instru[cç][aã]o\s+do\s+sistema\b|\bsystem\s+prompt\b|\bvoc[eê]\s+agora\s+[eé]\b|\bfim\s+do\s+texto\b|\bend\s+of\s+text\b|"classification"\s*:|\b(?:classifi\w+|considere|marque|trate)\b[^.\n]{0,40}\bcomo\s+(?:p[uú]blic[oa]?|public)\b'
+
+# Palavras-chave (palavra inteira; sem diferenciar maiúsculas e acentos).
+keywords:
+  - classification: RESTRICTED
+    terms: [restrito, restrita, restritos, restritas, estritamente confidencial]
+  - classification: CONFIDENTIAL
+    terms: [confidencial, confidenciais, sigiloso, sigilosa, sigilosos, sigilosas]
+  - classification: INTERNAL
+    terms: [uso interno]
+
+# Clientes e projetos classificados (palavra inteira; sem maiúsculas e acentos).
+classified_entities:
+  - {name: XPTO, kind: cliente, classification: CONFIDENTIAL}
+  - {name: Projeto Atlas, kind: projeto, classification: CONFIDENTIAL}
+
+# Classificador semântico (Fase 6): a IA Local classifica o que as regras acima
+# consideraram PUBLIC antes de ir a um modelo EXTERNO. Só torna a decisão mais
+# restritiva (teto max_level) e falha de forma conservadora (→ CONFIDENTIAL).
+# Limiar de confiança: SECURITY_CONFIDENCE_THRESHOLD (.env) ou confidence_threshold aqui.
+classifier:
+  enabled: true
+  url: http://local-ai:11434
+  model: qwen2.5:3b              # vazio → variável LOCAL_AI_MODEL
+  timeout_seconds: 30
+  max_chars: 4000                # mensagens maiores são divididas em pedaços
+  max_chunks: 6                  # acima disso → CONFIDENTIAL (grande demais para analisar)
+  max_level: CONFIDENTIAL        # o classificador não bloqueia sozinho
+  # Texto opcional sobre a empresa, acrescentado ao prompt do classificador. Medido em
+  # 07/10/2026: listar "o que é sensível" aqui fez o modelo reter perguntas genéricas
+  # (falsos positivos de 0% → ~70%). Prefira cadastrar clientes/projetos/termos nas
+  # regras acima; se usar, valide com tests/eval/classifier-eval.sh.
+  company_context: ""
+
+# Domínios internos: URLs/hosts nesses domínios → CONFIDENTIAL.
+internal_domains: [corporate-ai.local, empresa.local, intranet.empresa.com.br]

@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}Buscar{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>Buscar chamadas</h1>
+  <form method="get" action="/" class="grid">
+    <input type="hidden" name="run" value="1">
+    <label>Usuário (e-mail) <input name="user" value="{{ params.user or '' }}"></label>
+    <label>Conversa (ID) <input name="conversation" value="{{ params.conversation or '' }}"></label>
+    <label>De <input type="date" name="date_from" value="{{ params.date_from or '' }}"></label>
+    <label>Até <input type="date" name="date_to" value="{{ params.date_to or '' }}"></label>
+    <label>Classificação
+      <select name="classification">
+        <option value="">—</option>
+        {% for c in ["PUBLIC", "INTERNAL", "CONFIDENTIAL", "RESTRICTED"] %}
+        <option value="{{ c }}" {% if params.classification == c %}selected{% endif %}>{{ c }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Modelo pedido <input name="requested" value="{{ params.requested or '' }}" placeholder="gemini, auto…"></label>
+    <label>Modelo utilizado <input name="effective" value="{{ params.effective or '' }}" placeholder="local-ai…"></label>
+    <label>Motivo do roteamento
+      <select name="reason">
+        <option value="">—</option>
+        {% for r in ["DIRECT", "AUTO", "SECURITY_POLICY", "TOKEN_QUOTA_EXCEEDED", "BUDGET_EXCEEDED", "QUOTA_CHECK_UNAVAILABLE", "MODEL_ACCESS_DENIED"] %}
+        <option value="{{ r }}" {% if params.reason == r %}selected{% endif %}>{{ r }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% if "SEARCH_CONTENT" in user.perms %}
+    <label>Termo nas mensagens <input name="text" value="{{ params.text or '' }}"></label>
+    {% endif %}
+    <label class="check"><input type="checkbox" name="blocked" value="1" {% if params.blocked %}checked{% endif %}> Só bloqueadas</label>
+    <label class="check"><input type="checkbox" name="external" value="1" {% if params.external %}checked{% endif %}> Só modelo externo</label>
+    <button type="submit">Buscar</button>
+  </form>
+  {% if "VIEW_CONVERSATION" not in user.perms %}
+  <p class="muted">Seu perfil vê apenas metadados (quem, quando, modelos, decisão, tokens e custo), sem o conteúdo das conversas.</p>
+  {% endif %}
+</section>
+
+{% if message %}<p class="error">{{ message }}</p>{% endif %}
+{% if rows is not none %}
+<section class="card">
+  <h2>{{ rows | length }} chamada(s)</h2>
+  <div class="scroll">
+  <table>
+    <thead><tr>
+      <th>Horário (UTC)</th><th>Usuário</th><th>Conversa</th><th>Pedido → utilizado</th><th>Classificação</th>
+      <th>Motivo</th><th>Regras</th><th class="num">Tokens</th><th class="num">Custo US$</th><th>Status</th>
+      {% if "VIEW_CONVERSATION" in user.perms %}<th></th>{% endif %}
+    </tr></thead>
+    <tbody>
+    {% for r in rows %}
+      <tr class="{{ 'blocked' if r.status == 'BLOQUEADO' else '' }}">
+        <td>{{ r.time }}</td><td>{{ r.user }}</td><td class="mono">{{ r.conversation_id or "—" }}</td>
+        <td>{{ r.requested_model or "—" }} → {{ r.effective_model or "—" }}</td>
+        <td><span class="tag tag-{{ r.classification | lower }}">{{ r.classification or "—" }}</span></td>
+        <td>{{ r.routing_reason or "—" }}</td><td class="small">{{ r.security_reasons | join(", ") }}</td>
+        <td class="num">{{ r.tokens }}</td><td class="num">{{ "%.6f" | format(r.cost_usd) }}</td><td>{{ r.status }}</td>
+        {% if "VIEW_CONVERSATION" in user.perms %}
+        <td>{% if r.conversation_id %}<a href="/conversations/{{ r.conversation_id | urlencode }}">abrir conversa</a>
+            {% else %}<a href="/traces/{{ r.trace_id | urlencode }}">abrir chamada</a>{% endif %}</td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</section>
+{% endif %}
+{% endblock %}

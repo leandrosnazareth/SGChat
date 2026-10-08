@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Entrar{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>Entrar</h1>
+  <p>Use a sua conta do portal de chat. Apenas os perfis <code>AUDITOR</code> e <code>MASTER_AUDITOR</code> têm acesso.</p>
+  {% if message %}<p class="error">{{ message }}</p>{% endif %}
+  <form method="post" action="/login">
+    <label>E-mail <input type="email" name="email" value="{{ email or '' }}" required autocomplete="username"></label>
+    <label>Senha <input type="password" name="password" required autocomplete="current-password"></label>
+    <button type="submit">Entrar</button>
+  </form>
+</section>
+{% endblock %}

@@ -1,0 +1,43 @@
+# Política de acesso a modelos — Corporate AI Platform
+#
+# Aplicada pelo AI Gateway (litellm/custom/model_access.py) antes de qualquer
+# chamada a modelo. Alterações valem na próxima requisição, sem reiniciar.
+# Erro de sintaxe ou de estrutura NEGA o acesso de todos os usuários
+# (fail-closed). Como administrar: docs/models.md
+#
+# - groups: modelos permitidos por grupo (nomes lógicos do gateway).
+# - users: e-mail do usuário (como cadastrado no portal) → lista de grupos.
+#   Permissão efetiva = união dos grupos. Comparação sem diferenciar maiúsculas.
+# - default_group: grupo aplicado a usuários autenticados não listados.
+#
+# Todos os grupos incluem local-ai: o portal gera os títulos das conversas com ele.
+# auto (Fase 7): o gateway escolhe entre os modelos que o próprio usuário pode usar.
+
+version: 1
+
+default_group: USER
+
+groups:
+  USER:
+    models: [auto, local-ai, gemini]
+  DEVELOPER:
+    models: [auto, local-ai, gemini]
+  FINANCE:
+    models: [auto, local-ai]
+  MANAGER:
+    models: [auto, local-ai, gemini]
+  ADMIN:
+    models: [auto, local-ai, gemini]
+  AUDITOR:
+    models: [auto, local-ai]
+  MASTER_AUDITOR:
+    models: [auto, local-ai]
+
+users:
+  ana.teste@corporate-ai.local: [DEVELOPER]
+  bruno.teste@corporate-ai.local: [FINANCE]
+  # Fase 9: perfis de auditoria (portal de auditoria, docs/audit.md) e um administrador,
+  # que administra a plataforma mas NÃO audita conteúdo (ADMIN ≠ AUDITOR).
+  carla.auditora@corporate-ai.local: [AUDITOR]
+  diego.master@corporate-ai.local: [MASTER_AUDITOR]
+  edu.admin@corporate-ai.local: [ADMIN]

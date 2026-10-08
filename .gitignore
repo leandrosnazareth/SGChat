@@ -1,0 +1,24 @@
+# Secrets locais
+.env
+.env.*
+!.env.example
+
+# Dados e logs locais de containers (caso algum bind mount seja usado)
+data/
+logs/
+librechat/logs/
+librechat/uploads/
+librechat/images/
+*.log
+
+# Editor / SO
+.vscode/
+.idea/
+.DS_Store
+
+# Credenciais locais de usuários de teste
+.test-users
+
+# Configurações do Claude e documentação locais
+/.claude/
+/docs/

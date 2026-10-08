@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Motivo do acesso{% endblock %}
+{% block content %}
+<section class="card narrow">
+  <h1>{{ "Conversa" if kind == "conversations" else "Chamada" }} <span class="mono">{{ ident }}</span></h1>
+  <p>Abrir ou exportar o conteúdo exige um motivo. Ele fica registrado na trilha de auditoria junto com o seu usuário e o horário.</p>
+  {% if message %}<p class="error">{{ message }}</p>{% endif %}
+  <form method="post" action="/{{ kind }}/{{ ident | urlencode }}">
+    <input type="hidden" name="csrf" value="{{ user.csrf }}">
+    <label>Motivo <textarea name="reason" rows="3" required minlength="10" maxlength="500" placeholder="Ex.: investigação do chamado 42"></textarea></label>
+    <button type="submit">Abrir conversa</button>
+  </form>
+</section>
+{% endblock %}

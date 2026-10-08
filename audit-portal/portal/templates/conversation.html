@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Conversa{% endblock %}
+{% block content %}
+<section class="card">
+  <h1>{{ "Conversa" if kind == "conversations" else "Chamada" }} <span class="mono">{{ ident }}</span></h1>
+  <p class="muted">Acesso registrado na trilha (evento #{{ event[0] }}) · motivo: {{ reason }}</p>
+  <form method="post" action="/{{ kind }}/{{ ident | urlencode }}/export" class="inline">
+    <input type="hidden" name="csrf" value="{{ user.csrf }}">
+    <input type="hidden" name="reason" value="{{ reason }}">
+    {% if "EXPORT_CONVERSATION" in user.perms %}<button type="submit">Exportar (JSON) — registra EXPORT_CONVERSATION</button>{% endif %}
+  </form>
+</section>
+{% for r in rows %}
+<article class="card call {{ 'blocked' if r.status != 'ok' else '' }}">
+  <header>
+    <span>{{ r.time }} UTC · {{ r.user }}</span>
+    <span>{{ r.requested_model or "—" }} → {{ r.effective_model or "—" }}</span>
+    <span class="tag tag-{{ r.classification | lower }}">{{ r.classification or "—" }}</span>
+    <span>{{ r.routing_reason or "—" }}</span>
+    <span>{{ r.tokens }} tokens · US$ {{ "%.6f" | format(r.cost_usd) }}</span>
+    <span>{{ r.status }}</span>
+  </header>
+  {% if r.security_reasons %}<p class="small">Regras: {{ r.security_reasons | join(", ") }}</p>{% endif %}
+  <div class="msg user"><b>Pergunta</b><pre>{{ r.question }}</pre></div>
+  <div class="msg assistant"><b>{{ "Resposta" if r.status == "ok" else "Erro" }}</b><pre>{{ r.answer }}</pre></div>
+</article>
+{% endfor %}
+{% endblock %}

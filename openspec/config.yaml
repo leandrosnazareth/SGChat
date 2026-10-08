@@ -1,0 +1,56 @@
+schema: spec-driven
+
+context: |
+  Language: pt-BR
+  All artifacts must be written in pt-BR.
+  Keep OpenSpec structural headings and SHALL/MUST keywords in English.
+
+  Projeto: Corporate AI Platform (SGChat) — POC de plataforma corporativa self-hosted
+  para uso seguro, governado e auditável de IA (modelos locais + OpenAI, Gemini, Claude).
+  Fontes de requisitos: Corporate_AI_Platform_Documento_de_Software.docx (v1.0) e prompt.txt.
+
+  Stack (imagens oficiais, sem fork):
+  - LibreChat: portal de chat (login, histórico, anexos). Não contém regras de segurança.
+  - LiteLLM Proxy: AI Gateway único, OpenAI-compatible; virtual keys, budgets, rate limits, custos.
+  - Security Router: código Python próprio carregado no LiteLLM via custom callback/hook
+    pré-chamada (litellm/custom/*.py). Não criar microsserviço separado.
+  - Presidio (analyzer/anonymizer): detecção de PII com recognizers BR (CPF, CNPJ etc.).
+  - IA Local: container OpenAI-compatible; responde e atua como classificador semântico.
+  - Langfuse self-hosted: traces e auditoria (Postgres, ClickHouse, Redis/Valkey, MinIO).
+
+  Princípios inegociáveis:
+  - 100% Docker/Compose; host só tem Docker, Compose e runtime de GPU. Usar nomes de serviço, nunca IPs.
+  - LibreChat nunca fala direto com provedores; todo tráfego passa por LiteLLM → Security Router.
+  - Classificação PUBLIC < INTERNAL < CONFIDENTIAL < RESTRICTED; vence sempre a mais restritiva.
+  - Fail-closed: na dúvida (confidence < SECURITY_CONFIDENCE_THRESHOLD, classificador
+    indisponível ou resposta inválida) nada sai para provedor externo.
+  - Analisar o payload completo (histórico, system prompt, arquivos, RAG, tool results).
+  - Ordem de decisão: segurança → permissão → cota/budget → adequação → execução → auditoria.
+  - Autorização de modelos é validada no gateway (403 MODEL_ACCESS_DENIED), não só na UI.
+  - Registrar requestedModel, effectiveModel e routingReason em toda chamada.
+  - Regras empresariais e políticas em configuração, não hardcoded. Secrets nunca no Git.
+  - ADMIN ≠ AUDITOR; acessos de auditores também são auditados.
+
+rules:
+  proposal:
+    - Indicar a fase do roadmap (prompt.txt, seção 28) a que a mudança pertence
+    - Declarar explicitamente o que está fora do escopo
+    - Apontar impacto em segurança/fail-closed quando houver
+  design:
+    - Citar a versão e a documentação oficial dos componentes usados; não inventar APIs ou propriedades
+    - Preferir recursos nativos de LiteLLM/LibreChat/Langfuse/Presidio antes de código próprio
+  specs:
+    - Cada requisito de segurança deve ter cenário para o caminho de falha (fail-closed)
+  tasks:
+    - Incluir tarefas de validação real (docker compose up, health checks, testes)
+    - Incluir atualização de documentação em docs/ quando aplicável
+
+operations:
+  apply:
+    guidance:
+      - Ao fim de cada fase - build, docker compose up, health checks, testes, corrigir, documentar
+      - Não simular resultados de testes; só afirmar que funciona após executar e validar
+      - Não avançar de fase sem a anterior validada
+  archive:
+    guidance:
+      - Resumir o que foi validado e as pendências antes de arquivar
