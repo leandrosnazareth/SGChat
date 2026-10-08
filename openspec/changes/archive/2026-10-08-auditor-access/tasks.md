@@ -18,8 +18,8 @@
 
 ## 4. Documentação e regressão
 
-- [ ] 4.1 `docs/audit.md` (perfis, portal, trilha, verificação, riscos), `README.md`, `docs/architecture.md`
-- [ ] 4.2 Regressão completa; registrar em `docs/testing.md`; arquivar
+- [x] 4.1 `docs/audit.md` (perfis, portal, trilha, verificação, riscos), `README.md`, `docs/architecture.md`
+- [x] 4.2 Regressão completa; registrar em `docs/testing.md`; arquivar
 
 ## Workflow follow-up
 
